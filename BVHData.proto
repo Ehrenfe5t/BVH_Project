@@ -1,0 +1,103 @@
+syntax = "proto3";
+package BVHData;
+
+// 三维点结构（对应C++的Point3D）
+message Point3DProto {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// 射线轨迹采样点（对应ray_trajectory数组元素）
+message RayTrajectoryPointProto {
+  int32 index = 1;
+  double t = 2;
+  Point3DProto point = 3;
+}
+
+// 单个碰撞结果（对应collisions数组元素）
+message CollisionProto {
+  int32 index = 1;
+  int32 triangle_index = 2;
+  double distance = 3;
+  Point3DProto hit_point = 4;
+  bool is_closest = 5;
+}
+
+// 射线碰撞数据（对应ray_hit_data.pb）
+message RayHitDataProto {
+  message Metadata {
+    string export_time = 1;
+    double ray_max_distance = 2;
+    bool has_collision = 3;
+    int32 collision_count = 4;
+  }
+  message RayProto {
+    Point3DProto origin = 1;
+    Point3DProto direction = 2;
+    bool normalized = 3;
+  }
+  Metadata metadata = 1;
+  RayProto ray = 2;
+  repeated RayTrajectoryPointProto ray_trajectory = 3;
+  repeated CollisionProto collisions = 4;
+}
+
+// BVH节点结构（统一AABB和Sphere类型）
+message BVHNodeProto {
+  int32 node_id = 1;
+  int32 depth = 2;
+  string node_type = 3; // "leaf" / "internal"
+  string bound_type = 4; // "AABB" / "Sphere"
+
+  // AABB包围盒（bound_type为"AABB"时有效）
+  message AABBProto {
+    Point3DProto min = 1;
+    Point3DProto max = 2;
+    double surface_area = 3;
+  }
+  AABBProto aabb_bound = 5;
+
+  // 包围球（bound_type为"Sphere"时有效）
+  message SphereProto {
+    Point3DProto center = 1;
+    double radius = 2;
+  }
+  SphereProto sphere_bound = 6;
+
+  repeated int32 triangle_indices = 7;
+}
+
+// BVH结构数据（对应aabb_bvh_structure.pb和sphere_bvh_structure.pb）
+message BVHStructureProto {
+  message Metadata {
+    string bvh_type = 1;
+    string export_time = 2;
+    int32 node_count = 3;
+  }
+  Metadata metadata = 1;
+  repeated BVHNodeProto nodes = 2;
+}
+
+// BVH缓存数据（包含场景验证和BVH结构，用于复用）
+message BVHCachedDataProto {
+  // 场景验证信息（确保缓存与当前场景匹配）
+  message SceneInfo {
+    string obj_file_path = 1;       // 场景OBJ文件路径（唯一标识）
+    string obj_file_mtime = 2;      // OBJ文件最后修改时间
+    int32 triangle_count = 3;       // 场景三角形数量
+    int32 vertex_count = 4;         // 场景顶点数量
+  }
+
+  // 缓存元数据
+  message CacheMeta {
+    string cache_time = 1;          // 缓存创建时间
+    double build_time_ms = 2;        // BVH构建耗时（ms）
+    string bvh_type = 3;            // "AABB-BVH" / "Sphere-BVH"
+    string optimize_method = 4;      // 优化方式（如"SAH-Optimized"）
+  }
+
+  SceneInfo scene_info = 1;         // 场景验证核心信息
+  CacheMeta cache_meta = 2;         // 缓存元数据
+  BVHStructureProto bvh_data = 3;  // BVH结构数据
+}
