@@ -1,7 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
+
 #include "Core.h"
 #include <windows.h>
-
 
 // ProgressBar 构造函数实现（与声明一致）
 ProgressBar::ProgressBar(int totalSteps, const std::string& title, int updateInterval)
@@ -87,8 +87,9 @@ int CountFileLines(const std::string& filePath) {
     return lines;
 }
 
-// 几何工具函数实现
+// 几何工具函数实现（新增 DistanceSq 函数，其他保持不变）
 namespace GeometryUtils {
+
     double Dot(const Point3D& a, const Point3D& b) {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
@@ -106,6 +107,14 @@ namespace GeometryUtils {
         double dy = a.y - b.y;
         double dz = a.z - b.z;
         return sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    // 新增：平方距离计算（避免 sqrt，提升效率）
+    double DistanceSq(const Point3D& a, const Point3D& b) {
+        double dx = a.x - b.x;
+        double dy = a.y - b.y;
+        double dz = a.z - b.z;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     Point3D Normalize(const Point3D& a) {
@@ -139,10 +148,12 @@ namespace GeometryUtils {
         }
         return points;
     }
+
 }
 
-// 可视化工具实现
+// 可视化工具实现（完全不变）
 namespace Visualizer {
+
     void ShowRayAndHitDetail(const Point3D& rayOrigin, const Point3D& rayDir, const RayIntersectResult& result) {
         std::cout << "\n============================================" << std::endl;
         std::cout << "            射线+碰撞点详细信息             " << std::endl;
@@ -265,4 +276,5 @@ namespace Visualizer {
             std::cout << "  - 未检测到任何碰撞" << std::endl;
         }
     }
+
 }

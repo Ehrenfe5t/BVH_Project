@@ -1,0 +1,24 @@
+# Visual Studio 缓存/配置
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+# 编译输出目录
+obj/
+x64/
+# Python 缓存
+__pycache__/
+*.pyc
+# 临时文件
+new-code.txt（如果是临时文件则保留，否则注释掉）
+# vcpkg 本地缓存（无需提交）
+vcpkg/
+.idea/
+Cache/
+new-code.txt
+third_party/nlohmann
+BVH.sln
+BVH.vcxproj
+BVH.vcxproj.filters
+code.docx

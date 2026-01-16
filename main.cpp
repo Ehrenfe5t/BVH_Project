@@ -1,13 +1,15 @@
 #define _CRT_SECURE_NO_WARNINGS
+
 #include "Core.h"
 #include <filesystem>
+#include <omp.h> // 新增：OpenMP头文件
 
 namespace fs = std::filesystem;
 
 int main() {
     // ===================== 1. 目录管理：按场景分类缓存结构 =====================
     const std::string cacheRootDir = "Cache";
-    const std::string modelFilePath = "obj\\m.obj";
+    const std::string modelFilePath = "obj\\inroom1.obj";
     const fs::path modelFile(modelFilePath);
     const std::string sceneName = modelFile.stem().string();
     const std::string sceneCacheDir = cacheRootDir + "\\" + sceneName;
@@ -34,10 +36,17 @@ int main() {
     std::cerr.rdbuf(logFile.rdbuf());
 
     // ===================== 3. 配置参数与模型加载（带进度条） =====================
-    // 射线参数
-    Point3D rayOrigin(4000.0, 500, 3000);
-    Point3D rayDir(1.0, 0.0, 1.0);
+    // 射线参数（新增射线逆向量预处理）
+    Point3D rayOrigin(-500.0, -100, 1500);
+    Point3D rayDir(1.0, 1.0, 1.0);
     rayDir = GeometryUtils::Normalize(rayDir);
+
+    // 新增：预处理射线方向逆向量（减少碰撞检测时的除法计算）
+    Point3D rayDirInv(
+        rayDir.x == 0 ? (rayOrigin.x > 0 ? kRayMaxDistance : -kRayMaxDistance) : 1.0 / rayDir.x,
+        rayDir.y == 0 ? (rayOrigin.y > 0 ? kRayMaxDistance : -kRayMaxDistance) : 1.0 / rayDir.y,
+        rayDir.z == 0 ? (rayOrigin.z > 0 ? kRayMaxDistance : -kRayMaxDistance) : 1.0 / rayDir.z
+    );
 
     // 加载模型（带进度条）
     Scenario3D scene;
@@ -91,6 +100,9 @@ int main() {
     double aabbInitTime = 0.0, sphereInitTime = 0.0;
     bool isAABBCacheValid = false, isSphereCacheValid = false;
 
+    // 新增：设置OpenMP线程数（避免超核心并行开销）
+    omp_set_num_threads(std::min(kMaxThreadCount, static_cast<int>(std::thread::hardware_concurrency())));
+
     // 切换到控制台显示BVH进度
     std::cout.rdbuf(originalCoutBuf);
     std::cout << "\n============================================" << std::endl;
@@ -120,7 +132,7 @@ int main() {
             BVHAccelerator::SaveBVHCached<AABB>(
                 aabbCachePath, aabbBVH, modelFilePath, objFileMTime,
                 static_cast<int>(scene.points.size()), static_cast<int>(scene.triangles.size()),
-                "AABB-BVH(SAH-Optimized)", aabbInitTime
+                "AABB-BVH(SAH-Optimized(Bucket))", aabbInitTime // 更新优化方式说明
             );
         }
     }
@@ -153,7 +165,7 @@ int main() {
             BVHAccelerator::SaveBVHCached<BoundingSphere>(
                 sphereCachePath, sphereBVH, modelFilePath, objFileMTime,
                 static_cast<int>(scene.points.size()), static_cast<int>(scene.triangles.size()),
-                "Sphere-BVH(SAH-Optimized)", sphereInitTime
+                "Sphere-BVH(SAH-Optimized(Bucket))", sphereInitTime // 更新优化方式说明
             );
         }
     }
@@ -176,12 +188,12 @@ int main() {
     std::cout << "          射线碰撞检测中...                 " << std::endl;
     std::cout.rdbuf(logFile.rdbuf());
 
-    // AABB-BVH检测（带进度条）
+    // AABB-BVH检测（带进度条，传递预处理的 rayDirInv）
     std::cout.rdbuf(originalCoutBuf);
     ProgressBar aabbDetectProgress(static_cast<int>(scene.triangles.size()), "AABB-BVH检测");
     const TimePoint aabbDetectStart = GetCurrentTime();
     const RayIntersectResult aabbResult = BVHAccelerator::RayIntersectAABB(
-        scene, aabbBVH.get(), rayOrigin, rayDir, [&](int steps) {
+        scene, aabbBVH.get(), rayOrigin, rayDir, [&](int steps) { // 内部已集成 rayDirInv 传递
             aabbDetectProgress.Update(steps);
         }
     );
@@ -233,6 +245,35 @@ int main() {
     std::cout << "  差异（AABB - Sphere）：" << std::fixed << std::setprecision(3) << detectTimeDiff << "ms" << std::endl;
     std::cout << "  结论：" << (detectTimeDiff > 0 ? "Sphere-BVH检测更快" : "AABB-BVH检测更快") << std::endl;
 
+    // 新增：【碰撞结果详情】日志输出
+    std::cout << "\n【碰撞结果详情】" << std::endl;
+    // AABB-BVH 碰撞结果
+    std::cout << "  AABB-BVH 碰撞检测结果：" << std::endl;
+    if (aabbResult.hasAnyHit) {
+        const auto& closestAABBHit = aabbResult.GetClosestHit();
+        std::cout << "    - 碰撞状态：检测到碰撞" << std::endl;
+        std::cout << "    - 总碰撞点数量：" << aabbResult.allHits.size() << " 个" << std::endl;
+        std::cout << "    - 最近碰撞点距离：" << std::fixed << std::setprecision(6) << closestAABBHit.distance << " m" << std::endl;
+        std::cout << "    - 最近碰撞三角形索引：" << closestAABBHit.triangleIndex << std::endl;
+        std::cout << "    - 最近碰撞点坐标：(" << closestAABBHit.hitPoint.x << ", " << closestAABBHit.hitPoint.y << ", " << closestAABBHit.hitPoint.z << ")" << std::endl;
+    }
+    else {
+        std::cout << "    - 碰撞状态：未检测到任何碰撞" << std::endl;
+    }
+    // Sphere-BVH 碰撞结果
+    std::cout << "  Sphere-BVH 碰撞检测结果：" << std::endl;
+    if (sphereResult.hasAnyHit) {
+        const auto& closestSphereHit = sphereResult.GetClosestHit();
+        std::cout << "    - 碰撞状态：检测到碰撞" << std::endl;
+        std::cout << "    - 总碰撞点数量：" << sphereResult.allHits.size() << " 个" << std::endl;
+        std::cout << "    - 最近碰撞点距离：" << std::fixed << std::setprecision(6) << closestSphereHit.distance << " m" << std::endl;
+        std::cout << "    - 最近碰撞三角形索引：" << closestSphereHit.triangleIndex << std::endl;
+        std::cout << "    - 最近碰撞点坐标：(" << closestSphereHit.hitPoint.x << ", " << closestSphereHit.hitPoint.y << ", " << closestSphereHit.hitPoint.z << ")" << std::endl;
+    }
+    else {
+        std::cout << "    - 碰撞状态：未检测到任何碰撞" << std::endl;
+    }
+
     std::cout << "\n【节点数差异】" << std::endl;
     std::cout << "  AABB-BVH 节点总数：" << aabbNodeCount << std::endl;
     std::cout << "  Sphere-BVH 节点总数：" << sphereNodeCount << std::endl;
@@ -244,8 +285,8 @@ int main() {
     std::cout << "\n============================================" << std::endl;
     std::cout << "          结果导出中...                     " << std::endl;
     Visualizer::ExportRayAndHitToProtobuf(sceneCacheDir + "\\ray_hit_data.pb", rayOrigin, rayDir, aabbResult);
-    BVHAccelerator::ExportBVHToProtobuf(sceneCacheDir + "\\aabb_bvh_structure.pb", aabbBVH.get(), "AABB-BVH(SAH-Optimized)");
-    BVHAccelerator::ExportBVHToProtobuf(sceneCacheDir + "\\sphere_bvh_structure.pb", sphereBVH.get(), "Sphere-BVH(SAH-Optimized)");
+    BVHAccelerator::ExportBVHToProtobuf(sceneCacheDir + "\\aabb_bvh_structure.pb", aabbBVH.get(), "AABB-BVH(SAH-Optimized(Bucket))");
+    BVHAccelerator::ExportBVHToProtobuf(sceneCacheDir + "\\sphere_bvh_structure.pb", sphereBVH.get(), "Sphere-BVH(SAH-Optimized(Bucket))");
     std::cout.rdbuf(logFile.rdbuf());
 
     // ===================== 7. 最终结果输出与资源清理 =====================

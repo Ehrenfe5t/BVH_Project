@@ -1,4 +1,5 @@
 #pragma once
+
 #include <vector>
 #include <string>
 #include <chrono>
@@ -21,9 +22,10 @@
 #include <functional>
 #include <filesystem>
 #include <google/protobuf/repeated_field.h>
+#include <atomic> // 新增：原子变量支持
 #include "BVHData.pb.h"
 
-// 全局常量
+// 全局常量（新增 kMaxThreadCount，优化并行控制）
 const double kEps = 1e-8;               // 计算阈值
 const double kRayMaxDistance = 1e6;     // 射线最大检测距离
 const double kAABBEpsilon = 1e-6;       // AABB膨胀epsilon
@@ -31,6 +33,7 @@ const int kMaxBVHDepth = 64;            // BVH最大深度
 const int kMaxLeafSize = 8;             // 叶子节点最大三角数
 const int kSAHBucketCount = 16;         // SAH桶数量
 const int kParallelThreshold = 200;     // 并行阈值
+const int kMaxThreadCount = 8;          // 最大并行线程数（避免超核心开销）
 
 // 数值合法性校验
 inline bool IsValidNumber(double val) {
@@ -221,11 +224,12 @@ inline double CalculateElapsedMs(const TimePoint& start, const TimePoint& end) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count() / 1000000.0;
 }
 
-// 几何工具函数
+// 几何工具函数（新增 DistanceSq 用于平方距离计算）
 namespace GeometryUtils {
     double Dot(const Point3D& a, const Point3D& b);
     Point3D Cross(const Point3D& a, const Point3D& b);
     double Distance(const Point3D& a, const Point3D& b);
+    double DistanceSq(const Point3D& a, const Point3D& b); // 新增：平方距离（避免sqrt）
     Point3D Normalize(const Point3D& a);
     Point3D Sub(const Point3D& a, const Point3D& b);
     Point3D Add(const Point3D& a, const Point3D& b);
@@ -239,26 +243,30 @@ namespace ModelImporter {
     void TriangulatePolygon(const std::vector<int>& indices, std::vector<std::tuple<int, int, int>>& triangles);
 }
 
-// BVH加速结构
+// BVH加速结构（更新函数声明，适配优化逻辑）
 namespace BVHAccelerator {
     // AABB-BVH构建
     AABB BuildAABBForTriangle(const Scenario3D& scene, int triIndex);
     AABB BuildAABBForTriangles(const Scenario3D& scene, const std::vector<int>& triIndices);
-    std::unique_ptr<BVHNode<AABB>> BuildAABBBVHRecursive(const Scenario3D& scene, const std::vector<int>& triIndices, int depth, const BVHProgressCallback& progressCallback);
+    std::unique_ptr<BVHNode<AABB>> BuildAABBBVHRecursive(const Scenario3D& scene, const std::vector<int>& triIndices, int depth, const BVHProgressCallback& progressCallback, std::atomic<int>& processedTriangles); // 新增 atomic 参数
     std::unique_ptr<BVHNode<AABB>> BuildAABBBVH(const Scenario3D& scene, const BVHProgressCallback& progressCallback = nullptr);
 
-    // Sphere-BVH构建
-    BoundingSphere RitterMinSphere(const Scenario3D& scene, const std::vector<int>& triIndices);
+    // Sphere-BVH构建（替换 RitterMinSphere 为优化版本）
+    BoundingSphere RitterMinSphereOptimized(const Scenario3D& scene, const std::vector<int>& triIndices);
     BoundingSphere BuildSphereForTriangles(const Scenario3D& scene, const std::vector<int>& triIndices);
-    std::unique_ptr<BVHNode<BoundingSphere>> BuildSphereBVHRecursive(const Scenario3D& scene, const std::vector<int>& triIndices, int depth, const BVHProgressCallback& progressCallback);
+    std::unique_ptr<BVHNode<BoundingSphere>> BuildSphereBVHRecursive(const Scenario3D& scene, const std::vector<int>& triIndices, int depth, const BVHProgressCallback& progressCallback, std::atomic<int>& processedTriangles); // 新增 atomic 参数
     std::unique_ptr<BVHNode<BoundingSphere>> BuildSphereBVH(const Scenario3D& scene, const BVHProgressCallback& progressCallback = nullptr);
 
-    // 射线检测
-    bool RayIntersectAABB_Box(const Point3D& rayOrigin, const Point3D& rayDir, const AABB& aabb);
+    // 新增：计算节点到射线的最小距离（用于距离优先遍历）
+    double CalculateNodeMinDistance(const Point3D& rayOrigin, const Point3D& rayDir, const AABB& aabb);
+    double CalculateNodeMinDistance(const Point3D& rayOrigin, const Point3D& rayDir, const BoundingSphere& sphere);
+
+    // 射线检测（更新声明，适配优化逻辑）
+    bool RayIntersectAABB_Box(const Point3D& rayOrigin, const Point3D& rayDir, const Point3D& rayDirInv, const AABB& aabb); // 新增 rayDirInv 参数
     bool RayIntersectSphere(const Point3D& rayOrigin, const Point3D& rayDir, const BoundingSphere& sphere);
-    SingleHitResult RayIntersectTriangle(const Scenario3D& scene, int triIndex, const Point3D& rayOrigin, const Point3D& rayDir);
-    void TraverseAABBBVH(const Scenario3D& scene, const BVHNode<AABB>* node, const Point3D& rayOrigin, const Point3D& rayDir, RayIntersectResult& result, const RayProgressCallback& progressCallback, std::mutex& progressMtx);
-    void TraverseSphereBVH(const Scenario3D& scene, const BVHNode<BoundingSphere>* node, const Point3D& rayOrigin, const Point3D& rayDir, RayIntersectResult& result, const RayProgressCallback& progressCallback, std::mutex& progressMtx);
+    SingleHitResult RayIntersectTriangle(const Scenario3D& scene, int triIndex, const Point3D& rayOrigin, const Point3D& rayDir, double& tMin); // 新增 tMin 参数
+    void TraverseAABBBVH(const Scenario3D& scene, const BVHNode<AABB>* node, const Point3D& rayOrigin, const Point3D& rayDir, const Point3D& rayDirInv, RayIntersectResult& result, std::atomic<double>& tMin, const RayProgressCallback& progressCallback, std::mutex& progressMtx); // 新增 rayDirInv 和 atomic tMin
+    void TraverseSphereBVH(const Scenario3D& scene, const BVHNode<BoundingSphere>* node, const Point3D& rayOrigin, const Point3D& rayDir, RayIntersectResult& result, std::atomic<double>& tMin, const RayProgressCallback& progressCallback, std::mutex& progressMtx); // 新增 atomic tMin
     RayIntersectResult RayIntersectAABB(const Scenario3D& scene, const BVHNode<AABB>* root, const Point3D& rayOrigin, const Point3D& rayDir, const RayProgressCallback& progressCallback = nullptr);
     RayIntersectResult RayIntersectSphere(const Scenario3D& scene, const BVHNode<BoundingSphere>* root, const Point3D& rayOrigin, const Point3D& rayDir, const RayProgressCallback& progressCallback = nullptr);
 
